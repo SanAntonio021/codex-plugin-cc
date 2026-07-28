@@ -1,5 +1,10 @@
 # Codex plugin for Claude Code
 
+> Local maintenance fork: persistent `task` and `rescue` threads are registered as user threads so
+> they appear in Codex Desktop. Review, adversarial review, transfer, and stop-gate threads remain
+> hidden. This local source replaces the upstream `openai-codex` marketplace while preserving the
+> `codex@openai-codex` plugin ID used by resume validation.
+
 Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.
 
 This plugin is for Claude Code users who want an easy way to start using Codex from the workflow
