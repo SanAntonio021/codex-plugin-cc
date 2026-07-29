@@ -5,6 +5,23 @@
 > hidden. This local source replaces the upstream `openai-codex` marketplace while preserving the
 > `codex@openai-codex` plugin ID used by resume validation.
 
+## Maintaining this local fork
+
+This checkout carries a small Codex Desktop integration on top of the upstream
+plugin. Keep `origin` pointed at `openai/codex-plugin-cc` for comparison and
+fetches. Push personal branches to the `fork` remote.
+
+For an upstream contribution:
+
+1. Start an isolated worktree from `origin/main`.
+2. Keep the PR limited to portable runtime and test changes. Local version
+   metadata, marketplace source, permission settings, sync markers, and
+   fork-only documentation stay in the maintenance branch.
+3. Run the focused runtime tests, `npm run check-version`,
+   `claude plugin validate .`, and the available build checks.
+4. Push the branch to the personal fork and target `openai/codex-plugin-cc` in
+   the pull request.
+
 Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.
 
 This plugin is for Claude Code users who want an easy way to start using Codex from the workflow
