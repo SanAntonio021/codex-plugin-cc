@@ -66,7 +66,8 @@ export function terminateProcessTree(pid, options = {}) {
   if (platform === "win32") {
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
       cwd: options.cwd,
-      env: options.env
+      env: options.env,
+      shell: false
     });
 
     if (!result.error && result.status === 0) {
@@ -132,4 +133,51 @@ export function formatCommandFailure(result) {
     parts.push(stdout);
   }
   return parts.join(": ");
+}
+
+/**
+ * Check whether a process with the given PID is still alive.
+ * Returns: true (alive), false (dead), or "unknown" (cannot determine).
+ *
+ * - Unix: process.kill(pid, 0) — ESRCH means dead, EPERM means alive.
+ * - Windows: tasklist /FI "PID eq <pid>" with shell:false to avoid Git Bash path mangling.
+ */
+export function isProcessAlive(pid, options = {}) {
+  if (!Number.isFinite(pid)) {
+    return false;
+  }
+
+  const platform = options.platform ?? process.platform;
+
+  if (platform === "win32") {
+    const result = runCommand("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], {
+      shell: false
+    });
+    if (result.error) {
+      return "unknown";
+    }
+    // tasklist prints the process info line if found, or "INFO: No tasks" if not
+    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    if (output.includes("no tasks") || output.includes("no running")) {
+      return false;
+    }
+    if (output.includes(String(pid))) {
+      return true;
+    }
+    return "unknown";
+  }
+
+  // Unix: signal 0 probes without killing
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return false; // No such process
+    }
+    if (error?.code === "EPERM") {
+      return true; // Process exists but we lack permission
+    }
+    return "unknown";
+  }
 }

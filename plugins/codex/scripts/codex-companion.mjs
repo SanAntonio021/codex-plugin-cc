@@ -340,7 +340,46 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    // Zombie detection: if the process is dead, auto-clean instead of blocking
+    if (activeTask.pid) {
+      const { isProcessAlive } = await import("./lib/process.mjs");
+      const alive = isProcessAlive(activeTask.pid);
+      if (alive === false) {
+        const { upsertJob, writeJobFile } = await import("./lib/state.mjs");
+        const { nowIso } = await import("./lib/tracked-jobs.mjs");
+        const completedAt = nowIso();
+        upsertJob(workspaceRoot, {
+          id: activeTask.id,
+          status: "failed",
+          phase: "failed",
+          pid: null,
+          errorMessage: "Process exited without updating job state (zombie detected)",
+          completedAt
+        });
+        // Don't throw — fall through to allow new task creation
+      } else {
+        throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+      }
+    } else if (activeTask.status === "queued") {
+      // Queued without pid for > 60s = stale
+      const age = Date.now() - Date.parse(activeTask.createdAt || "");
+      if (age > 60000) {
+        const { upsertJob } = await import("./lib/state.mjs");
+        const { nowIso } = await import("./lib/tracked-jobs.mjs");
+        upsertJob(workspaceRoot, {
+          id: activeTask.id,
+          status: "failed",
+          phase: "failed",
+          pid: null,
+          errorMessage: "Job was queued but never started (stale queued job)",
+          completedAt: nowIso()
+        });
+      } else {
+        throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+      }
+    } else {
+      throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
+    }
   }
 
   const trackedTask = findLatestResumableTaskJob(visibleJobs);

@@ -1,8 +1,10 @@
 import fs from "node:fs";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
-import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
+import { resolveJobRecord } from "./job-store.mjs";
+import { isProcessAlive } from "./process.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobFile, upsertJob, writeJobFile } from "./state.mjs";
+import { SESSION_ID_ENV, nowIso } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
 export const DEFAULT_MAX_STATUS_JOBS = 8;
@@ -181,11 +183,7 @@ export function enrichJob(job, options = {}) {
 }
 
 export function readStoredJob(workspaceRoot, jobId) {
-  const jobFile = resolveJobFile(workspaceRoot, jobId);
-  if (!fs.existsSync(jobFile)) {
-    return null;
-  }
-  return readJobFile(jobFile);
+  return resolveJobRecord(workspaceRoot, jobId);
 }
 
 function matchJobReference(jobs, reference, predicate = () => true) {
@@ -219,7 +217,50 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
   const running = jobs
     .filter((job) => job.status === "queued" || job.status === "running")
-    .map((job) => enrichJob(job, { maxProgressLines }));
+    .map((job) => {
+      // Zombie detection: if job claims running but pid is dead, mark as failed
+      if (job.status === "running" && job.pid) {
+        const alive = isProcessAlive(job.pid);
+        if (alive === false) {
+          const completedAt = nowIso();
+          upsertJob(workspaceRoot, {
+            id: job.id,
+            status: "failed",
+            phase: "failed",
+            pid: null,
+            errorMessage: "Process exited without updating job state (zombie detected)",
+            completedAt
+          });
+          writeJobFile(workspaceRoot, job.id, {
+            ...readStoredJob(workspaceRoot, job.id),
+            status: "failed",
+            phase: "failed",
+            pid: null,
+            errorMessage: "Process exited without updating job state (zombie detected)",
+            completedAt
+          });
+          return enrichJob({ ...job, status: "failed", phase: "failed", completedAt }, { maxProgressLines });
+        }
+      }
+      // Queued without pid — if no pid was ever recorded and createdAt > 60s ago, mark failed
+      if (job.status === "queued" && !job.pid) {
+        const age = Date.now() - Date.parse(job.createdAt || "");
+        if (age > 60000) {
+          const completedAt = nowIso();
+          upsertJob(workspaceRoot, {
+            id: job.id,
+            status: "failed",
+            phase: "failed",
+            pid: null,
+            errorMessage: "Job was queued but never started (stale queued job)",
+            completedAt
+          });
+          return enrichJob({ ...job, status: "failed", phase: "failed", completedAt }, { maxProgressLines });
+        }
+      }
+      return enrichJob(job, { maxProgressLines });
+    })
+    .filter((job) => job.status === "queued" || job.status === "running");
 
   const latestFinishedRaw = jobs.find((job) => job.status !== "queued" && job.status !== "running") ?? null;
   const latestFinished = latestFinishedRaw ? enrichJob(latestFinishedRaw, { maxProgressLines }) : null;
