@@ -89,10 +89,22 @@ function removeFileIfExists(filePath) {
   }
 }
 
-export function saveState(cwd, state) {
+/**
+ * Persist index state.
+ *
+ * Options:
+ *   prune        {boolean} – when true, cap jobs at MAX_JOBS and delete the
+ *                            JSON files of evicted records.  .log files are
+ *                            NEVER deleted here regardless of this flag.
+ *   removeJobIds {string[]} – additional job IDs whose JSON files should be
+ *                             deleted (used by SessionEnd cleanup).
+ */
+export function saveState(cwd, state, options = {}) {
   const previousJobs = loadState(cwd).jobs;
   ensureStateDir(cwd);
-  const nextJobs = pruneJobs(state.jobs ?? []);
+
+  const prune = options.prune !== false; // default true for backward compat
+  const nextJobs = prune ? pruneJobs(state.jobs ?? []) : (state.jobs ?? []);
   const nextState = {
     version: STATE_VERSION,
     config: {
@@ -102,13 +114,19 @@ export function saveState(cwd, state) {
     jobs: nextJobs
   };
 
-  const retainedIds = new Set(nextJobs.map((job) => job.id));
-  for (const job of previousJobs) {
-    if (retainedIds.has(job.id)) {
-      continue;
+  if (prune) {
+    // Delete JSON files for jobs evicted by the MAX_JOBS cap — never .log files.
+    const retainedIds = new Set(nextJobs.map((job) => job.id));
+    for (const job of previousJobs) {
+      if (!retainedIds.has(job.id)) {
+        removeJobFile(resolveJobFile(cwd, job.id));
+      }
     }
-    removeJobFile(resolveJobFile(cwd, job.id));
-    removeFileIfExists(job.logFile);
+  }
+
+  const extraRemoveIds = options.removeJobIds ?? [];
+  for (const jobId of extraRemoveIds) {
+    removeJobFile(resolveJobFile(cwd, jobId));
   }
 
   fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");

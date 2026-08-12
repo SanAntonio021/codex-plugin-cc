@@ -25,7 +25,7 @@ export function runCommand(command, args = [], options = {}) {
 }
 
 export function runCommandChecked(command, args = [], options = {}) {
-  const result = runCommand(command, args, options);
+  const result = runCommand(command, args, { shell: false, ...options });
   if (result.error) {
     throw result.error;
   }
@@ -36,7 +36,7 @@ export function runCommandChecked(command, args = [], options = {}) {
 }
 
 export function binaryAvailable(command, versionArgs = ["--version"], options = {}) {
-  const result = runCommand(command, versionArgs, options);
+  const result = runCommand(command, versionArgs, { shell: false, ...options });
   if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT") {
     return { available: false, detail: "not found" };
   }

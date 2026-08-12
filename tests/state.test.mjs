@@ -7,13 +7,31 @@ import assert from "node:assert/strict";
 import { makeTempDir } from "./helpers.mjs";
 import { resolveJobFile, resolveJobLogFile, resolveStateDir, resolveStateFile, saveState } from "../plugins/codex/scripts/lib/state.mjs";
 
-test("resolveStateDir uses a temp-backed per-workspace directory", () => {
+test("resolveStateDir uses a temp-backed per-workspace directory when CLAUDE_PLUGIN_DATA is unset", () => {
   const workspace = makeTempDir();
-  const stateDir = resolveStateDir(workspace);
+  const previousPluginDataDir = process.env.CLAUDE_PLUGIN_DATA;
+  delete process.env.CLAUDE_PLUGIN_DATA;
 
-  assert.equal(stateDir.startsWith(os.tmpdir()), true);
-  assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
-  assert.match(stateDir, new RegExp(`^${os.tmpdir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  try {
+    const stateDir = resolveStateDir(workspace);
+
+    assert.match(path.basename(stateDir), /.+-[a-f0-9]{16}$/);
+    // When CLAUDE_PLUGIN_DATA is unset the fallback is os.tmpdir()/codex-companion.
+    // If the variable happens to be set in the outer environment, the test would
+    // fail incorrectly, so we re-derive the expected root here.
+    const expectedRoot = path.join(os.tmpdir(), "codex-companion");
+    assert.equal(
+      stateDir.toLowerCase().startsWith(expectedRoot.toLowerCase()),
+      true,
+      `stateDir "${stateDir}" should start with "${expectedRoot}"`
+    );
+  } finally {
+    if (previousPluginDataDir == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previousPluginDataDir;
+    }
+  }
 });
 
 test("resolveStateDir uses CLAUDE_PLUGIN_DATA when it is provided", () => {
@@ -96,10 +114,36 @@ test("saveState prunes dropped job artifacts when indexed jobs exceed the cap", 
     savedState.jobs.map((job) => job.id),
     Array.from({ length: 50 }, (_, index) => `job-${50 - index}`)
   );
-  assert.deepEqual(
-    fs.readdirSync(jobsDir).sort(),
-    Array.from({ length: 50 }, (_, index) => `job-${index + 1}`)
-      .flatMap((jobId) => [`${jobId}.json`, `${jobId}.log`])
-      .sort()
-  );
+  // The pruned job-0's JSON is gone, but its .log must NOT be deleted.
+  assert.equal(fs.existsSync(prunedJobFile), false);
+  assert.equal(fs.existsSync(prunedLogFile), true, ".log of a pruned job must be preserved");
+
+  // All retained jobs keep both artifacts.
+  const allFiles = fs.readdirSync(jobsDir).sort();
+  for (let i = 1; i <= 50; i++) {
+    assert.equal(allFiles.includes(`job-${i}.json`), true, `job-${i}.json should exist`);
+    assert.equal(allFiles.includes(`job-${i}.log`), true, `job-${i}.log should exist`);
+  }
+});
+
+test("saveState with removeJobIds deletes specified JSON but never the .log", () => {
+  const workspace = makeTempDir();
+  fs.mkdirSync(path.dirname(resolveStateFile(workspace)), { recursive: true });
+
+  const jobId = "job-rm-test";
+  const logFile = resolveJobLogFile(workspace, jobId);
+  const jobFile = resolveJobFile(workspace, jobId);
+  const updatedAt = new Date(Date.UTC(2026, 0, 1)).toISOString();
+
+  fs.writeFileSync(logFile, "keep me\n", "utf8");
+  fs.writeFileSync(jobFile, JSON.stringify({ id: jobId, status: "completed" }, null, 2), "utf8");
+
+  const jobs = [{ id: jobId, status: "completed", logFile, updatedAt, createdAt: updatedAt }];
+
+  saveState(workspace, { version: 1, config: { stopReviewGate: false }, jobs: [] }, {
+    removeJobIds: [jobId]
+  });
+
+  assert.equal(fs.existsSync(jobFile), false, "JSON of removeJobIds entry must be deleted");
+  assert.equal(fs.existsSync(logFile), true, ".log of removeJobIds entry must be preserved");
 });

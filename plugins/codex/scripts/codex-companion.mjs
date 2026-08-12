@@ -340,32 +340,44 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
   const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
   if (activeTask) {
-    // Zombie detection: if the process is dead, auto-clean instead of blocking
+    const { isProcessAlive } = await import("./lib/process.mjs");
+    const { upsertJob, writeJobFile } = await import("./lib/state.mjs");
+    const { nowIso } = await import("./lib/tracked-jobs.mjs");
+
     if (activeTask.pid) {
-      const { isProcessAlive } = await import("./lib/process.mjs");
+      // Both queued and running with a pid: check whether the worker is alive.
       const alive = isProcessAlive(activeTask.pid);
       if (alive === false) {
-        const { upsertJob, writeJobFile } = await import("./lib/state.mjs");
-        const { nowIso } = await import("./lib/tracked-jobs.mjs");
-        const completedAt = nowIso();
-        upsertJob(workspaceRoot, {
-          id: activeTask.id,
-          status: "failed",
-          phase: "failed",
-          pid: null,
-          errorMessage: "Process exited without updating job state (zombie detected)",
-          completedAt
-        });
+        // Process is dead — but the worker may have already written a terminal
+        // state to the job file since we last read the index.  Re-read via the
+        // unified layer before overwriting anything.
+        const { resolveJobRecord } = await import("./lib/job-store.mjs");
+        const freshJob = resolveJobRecord(workspaceRoot, activeTask.id);
+        if (freshJob && (freshJob.status === "completed" || freshJob.status === "cancelled")) {
+          // Worker finished cleanly — just fall through, no overwrite needed.
+        } else {
+          const completedAt = nowIso();
+          upsertJob(workspaceRoot, {
+            id: activeTask.id,
+            status: "failed",
+            phase: "failed",
+            pid: null,
+            errorMessage: "Process exited without updating job state (zombie detected)",
+            completedAt
+          });
+        }
         // Don't throw — fall through to allow new task creation
+      } else if (alive === "unknown") {
+        // Cannot confirm or deny liveness — leave the record as-is and block.
+        throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
       } else {
+        // alive === true
         throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
       }
     } else if (activeTask.status === "queued") {
       // Queued without pid for > 60s = stale
       const age = Date.now() - Date.parse(activeTask.createdAt || "");
       if (age > 60000) {
-        const { upsertJob } = await import("./lib/state.mjs");
-        const { nowIso } = await import("./lib/tracked-jobs.mjs");
         upsertJob(workspaceRoot, {
           id: activeTask.id,
           status: "failed",
@@ -378,6 +390,7 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
         throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
       }
     } else {
+      // running with no pid at all — cannot confirm alive, block.
       throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
     }
   }
