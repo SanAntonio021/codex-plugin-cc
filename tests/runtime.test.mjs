@@ -1911,9 +1911,18 @@ test("session end fully cleans up jobs for the ending session", async (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(otherSessionLog), true);
   assert.equal(fs.existsSync(otherJobFile), true);
+
+  // After D5: SessionEnd removes job JSON files but keeps .log files for forensics
+  const actualFiles = fs.readdirSync(jobsDir).sort();
   assert.deepEqual(
-    fs.readdirSync(path.dirname(otherJobFile)).sort(),
-    [path.basename(otherJobFile), path.basename(otherSessionLog)].sort()
+    actualFiles,
+    [
+      path.basename(completedLog),
+      path.basename(otherJobFile),
+      path.basename(otherSessionLog),
+      path.basename(runningLog)
+    ].sort(),
+    "SessionEnd should remove current session job JSON but keep all .log files"
   );
 
   await waitFor(() => {

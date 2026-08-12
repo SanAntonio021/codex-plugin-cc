@@ -13,7 +13,8 @@ export function createBrokerEndpoint(sessionDir, platform = process.platform) {
     return `pipe:\\\\.\\pipe\\${pipeName}`;
   }
 
-  return `unix:${path.join(sessionDir, "broker.sock")}`;
+  // Use posix path separator even when running on Windows (for cross-platform tests)
+  return `unix:${path.posix.join(sessionDir, "broker.sock")}`;
 }
 
 export function parseBrokerEndpoint(endpoint) {
