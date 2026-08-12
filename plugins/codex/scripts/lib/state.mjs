@@ -98,6 +98,9 @@ function removeFileIfExists(filePath) {
  *                            NEVER deleted here regardless of this flag.
  *   removeJobIds {string[]} – additional job IDs whose JSON files should be
  *                             deleted (used by SessionEnd cleanup).
+ *
+ * The write is atomic: content is written to a tmp file then renamed over the
+ * target, so a crash mid-write never leaves a half-written state.json.
  */
 export function saveState(cwd, state, options = {}) {
   const previousJobs = loadState(cwd).jobs;
@@ -129,7 +132,16 @@ export function saveState(cwd, state, options = {}) {
     removeJobFile(resolveJobFile(cwd, jobId));
   }
 
-  fs.writeFileSync(resolveStateFile(cwd), `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+  // Atomic write: write to tmp then rename so a crash never corrupts state.json.
+  const stateFile = resolveStateFile(cwd);
+  const tmpFile = stateFile + ".tmp-" + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  try {
+    fs.writeFileSync(tmpFile, `${JSON.stringify(nextState, null, 2)}\n`, "utf8");
+    fs.renameSync(tmpFile, stateFile);
+  } catch (err) {
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore cleanup error */ }
+    throw err;
+  }
   return nextState;
 }
 
@@ -145,23 +157,26 @@ export function generateJobId(prefix = "job") {
 }
 
 export function upsertJob(cwd, jobPatch) {
-  return updateState(cwd, (state) => {
-    const timestamp = nowIso();
-    const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
-    if (existingIndex === -1) {
-      state.jobs.unshift({
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        ...jobPatch
-      });
-      return;
-    }
+  const state = loadState(cwd);
+  const timestamp = nowIso();
+  const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
+  const isNew = existingIndex === -1;
+  if (isNew) {
+    state.jobs.unshift({
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      ...jobPatch
+    });
+  } else {
     state.jobs[existingIndex] = {
       ...state.jobs[existingIndex],
       ...jobPatch,
       updatedAt: timestamp
     };
-  });
+  }
+  // Only prune the index when adding a new record.  Updates and backfills
+  // must not evict unrelated jobs from the index.
+  return saveState(cwd, state, { prune: isNew });
 }
 
 export function listJobs(cwd) {

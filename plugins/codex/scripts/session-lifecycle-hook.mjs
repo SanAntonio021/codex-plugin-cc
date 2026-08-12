@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { terminateProcessTree } from "./lib/process.mjs";
+import { terminateProcessTree, isProcessAlive } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
 import {
   clearBrokerSession,
@@ -58,21 +58,32 @@ function cleanupSessionJobs(cwd, sessionId) {
 
   for (const job of removedJobs) {
     const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) {
+    if (!stillRunning || !job.pid) {
+      // No pid recorded or already in a terminal state — skip kill attempt.
       continue;
     }
+    // Verify the process is still alive before attempting to kill it.
+    // This avoids sending taskkill to a PID that has already been reused by
+    // an unrelated process.  "unknown" means we can't confirm either way —
+    // attempt the kill anyway (worst case it fails harmlessly).
+    const alive = isProcessAlive(job.pid);
+    if (alive === false) {
+      continue; // already dead, nothing to terminate
+    }
     try {
-      terminateProcessTree(job.pid ?? Number.NaN);
+      terminateProcessTree(job.pid);
     } catch {
       // Ignore teardown failures during session shutdown.
     }
   }
 
   const removedIds = removedJobs.map((job) => job.id);
+  // Use prune:false so that removing session jobs never triggers eviction of
+  // unrelated jobs from the index.
   saveState(workspaceRoot, {
     ...state,
     jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
-  }, { removeJobIds: removedIds });
+  }, { prune: false, removeJobIds: removedIds });
 }
 
 function handleSessionStart(input) {

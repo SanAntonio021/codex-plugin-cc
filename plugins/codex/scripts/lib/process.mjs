@@ -25,7 +25,7 @@ export function runCommand(command, args = [], options = {}) {
 }
 
 export function runCommandChecked(command, args = [], options = {}) {
-  const result = runCommand(command, args, { shell: false, ...options });
+  const result = runCommand(command, args, { ...options, shell: false });
   if (result.error) {
     throw result.error;
   }
@@ -36,7 +36,7 @@ export function runCommandChecked(command, args = [], options = {}) {
 }
 
 export function binaryAvailable(command, versionArgs = ["--version"], options = {}) {
-  const result = runCommand(command, versionArgs, { shell: false, ...options });
+  const result = runCommand(command, versionArgs, { ...options, shell: false });
   if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOENT") {
     return { available: false, detail: "not found" };
   }
@@ -150,21 +150,29 @@ export function isProcessAlive(pid, options = {}) {
   const platform = options.platform ?? process.platform;
 
   if (platform === "win32") {
-    const result = runCommand("tasklist", ["/FI", `PID eq ${pid}`, "/NH"], {
+    // Use /FO CSV for locale-independent output.  The data lines are formatted
+    // as:  "ImageName","PID","SessionName","Session#","MemUsage"
+    // When no process matches, tasklist emits a non-CSV info/warning line.
+    const result = runCommand("tasklist", ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"], {
       shell: false
     });
     if (result.error) {
       return "unknown";
     }
-    // tasklist prints the process info line if found, or "INFO: No tasks" if not
-    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-    if (output.includes("no tasks") || output.includes("no running")) {
-      return false;
+    // Non-zero exit means the filter was invalid or access was denied — unknown.
+    if (result.status !== 0) {
+      return "unknown";
     }
-    if (output.includes(String(pid))) {
-      return true;
+    const pidStr = String(pid);
+    for (const line of result.stdout.split(/\r?\n/)) {
+      // CSV line: each field is quoted, PID is the second field.
+      const m = line.match(/^"[^"]*","(\d+)"/);
+      if (m && m[1] === pidStr) {
+        return true;
+      }
     }
-    return "unknown";
+    // No CSV row matched our PID — process is not running.
+    return false;
   }
 
   // Unix: signal 0 probes without killing
