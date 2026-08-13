@@ -700,6 +700,10 @@ function readTaskPrompt(cwd, options, positionals) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
   }
 
+  if (options.prompt) {
+    return options.prompt;
+  }
+
   const positionalPrompt = positionals.join(" ");
   return positionalPrompt || readStdinIfPiped();
 }
@@ -816,7 +820,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "prompt"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
