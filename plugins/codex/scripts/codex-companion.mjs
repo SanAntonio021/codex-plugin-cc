@@ -71,6 +71,14 @@ const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+const DEFAULT_TASK_SANDBOX = "danger-full-access";
+const READ_ONLY_TASK_SANDBOX = "read-only";
+const LEGACY_WRITE_TASK_SANDBOX = "workspace-write";
+const VALID_TASK_SANDBOXES = new Set([
+  DEFAULT_TASK_SANDBOX,
+  READ_ONLY_TASK_SANDBOX,
+  LEGACY_WRITE_TASK_SANDBOX
+]);
 
 function printUsage() {
   console.log(
@@ -79,7 +87,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--read-only|--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -125,6 +133,28 @@ function normalizeReasoningEffort(effort) {
     );
   }
   return normalized;
+}
+
+function resolveTaskSandbox(options = {}) {
+  if (options.write && options["read-only"]) {
+    throw new Error("Choose either --write or --read-only. --write is a compatibility alias because task defaults to danger-full-access.");
+  }
+  return options["read-only"] ? READ_ONLY_TASK_SANDBOX : DEFAULT_TASK_SANDBOX;
+}
+
+function resolveStoredTaskSandbox(request) {
+  const sandbox = request?.sandbox;
+  if (sandbox == null) {
+    return request?.write ? LEGACY_WRITE_TASK_SANDBOX : READ_ONLY_TASK_SANDBOX;
+  }
+  if (!VALID_TASK_SANDBOXES.has(sandbox)) {
+    throw new Error(`Stored task request has unsupported sandbox "${sandbox}".`);
+  }
+  return sandbox;
+}
+
+function isWriteCapableTaskSandbox(sandbox) {
+  return sandbox !== READ_ONLY_TASK_SANDBOX;
 }
 
 function normalizeArgv(argv) {
@@ -181,7 +211,10 @@ function firstMeaningfulLine(text, fallback) {
 
 async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
+  // Node is a native executable; avoid the Windows shell so a minimal PATH is
+  // handled consistently. npm/codex still use their normal .cmd-aware lookup
+  // path below.
+  const nodeStatus = binaryAvailable("node", ["--version"], { cwd, shell: false });
   const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
   const codexStatus = getCodexAvailability(cwd);
   const authStatus = await getCodexAuthStatus(cwd);
@@ -513,6 +546,8 @@ async function executeReviewRun(request) {
 async function executeTaskRun(request) {
   const workspaceRoot = resolveWorkspaceRoot(request.cwd);
   ensureCodexAvailable(request.cwd);
+  const sandbox = resolveStoredTaskSandbox(request);
+  const write = isWriteCapableTaskSandbox(sandbox);
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
@@ -540,7 +575,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "read-only",
+    sandbox,
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT),
@@ -558,7 +593,7 @@ async function executeTaskRun(request) {
     {
       title: taskMetadata.title,
       jobId: request.jobId ?? null,
-      write: Boolean(request.write)
+      write
     }
   );
   const payload = {
@@ -578,7 +613,7 @@ async function executeTaskRun(request) {
     summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
-    write: Boolean(request.write)
+    write
   };
 }
 
@@ -619,7 +654,7 @@ function getJobKindLabel(kind, jobClass) {
   return jobClass === "review" ? "review" : "rescue";
 }
 
-function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
+function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false, sandbox = null }) {
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
@@ -628,7 +663,8 @@ function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summ
     workspaceRoot,
     jobClass,
     summary,
-    write
+    write,
+    ...(sandbox ? { sandbox } : {})
   });
 }
 
@@ -644,7 +680,7 @@ function createTrackedProgress(job, options = {}) {
   };
 }
 
-function buildTaskJob(workspaceRoot, taskMetadata, write) {
+function buildTaskJob(workspaceRoot, taskMetadata, sandbox) {
   return createCompanionJob({
     prefix: "task",
     kind: "task",
@@ -652,17 +688,19 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
     workspaceRoot,
     jobClass: "task",
     summary: taskMetadata.summary,
-    write
+    write: isWriteCapableTaskSandbox(sandbox),
+    sandbox
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, sandbox, resumeLast, jobId }) {
   return {
     cwd,
     model,
     effort,
     prompt,
-    write,
+    sandbox,
+    write: isWriteCapableTaskSandbox(sandbox),
     resumeLast,
     jobId
   };
@@ -821,7 +859,7 @@ async function handleReview(argv) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "prompt"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
+    booleanOptions: ["json", "write", "read-only", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
     }
@@ -831,6 +869,7 @@ async function handleTask(argv) {
   const workspaceRoot = resolveCommandWorkspace(options);
   const model = normalizeRequestedModel(options.model);
   const effort = normalizeReasoningEffort(options.effort);
+  const sandbox = resolveTaskSandbox(options);
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -838,7 +877,6 @@ async function handleTask(argv) {
   if (resumeLast && fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
-  const write = Boolean(options.write);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
     resumeLast
@@ -848,13 +886,13 @@ async function handleTask(argv) {
     ensureCodexAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
-    const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+    const job = buildTaskJob(workspaceRoot, taskMetadata, sandbox);
     const request = buildTaskRequest({
       cwd,
       model,
       effort,
       prompt,
-      write,
+      sandbox,
       resumeLast,
       jobId: job.id
     });
@@ -863,7 +901,7 @@ async function handleTask(argv) {
     return;
   }
 
-  const job = buildTaskJob(workspaceRoot, taskMetadata, write);
+  const job = buildTaskJob(workspaceRoot, taskMetadata, sandbox);
   await runForegroundCommand(
     job,
     (progress) =>
@@ -872,7 +910,7 @@ async function handleTask(argv) {
         model,
         effort,
         prompt,
-        write,
+        sandbox,
         resumeLast,
         jobId: job.id,
         onProgress: progress

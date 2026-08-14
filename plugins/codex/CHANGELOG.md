@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.9
+
+- **Breaking change:** `task` now defaults to `danger-full-access`, including paths outside the
+  current workspace. `--read-only` is the explicit downgrade flag; `--write` remains a compatible
+  alias for the default.
+- Foreground, background, and resumed tasks use one persisted sandbox value. Queued jobs created
+  before this release keep their original `workspace-write` or `read-only` behavior from `write`.
+- Review, adversarial-review, and stop-gate paths remain hard-coded `read-only`; transfer does not
+  run a task turn.
+- Setup probes the native Node executable without shell expansion, so minimal Windows `PATH`
+  environments no longer report a false not-ready state.
+- Windows task cancellation tolerates a partial `taskkill` result when the recorded root worker has
+  already exited, while still surfacing failures when the root process remains alive.
+- Transfer regression fixtures now inject the Windows user profile explicitly, exercising native
+  import error handling without weakening the Claude projects directory allowlist.
+
 ## 1.0.8
 
 - fix(Bug1): Detect zombie jobs — probes PID liveness for both `running` and `queued` states;

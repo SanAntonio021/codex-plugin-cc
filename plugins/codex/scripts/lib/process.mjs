@@ -62,6 +62,7 @@ export function terminateProcessTree(pid, options = {}) {
   const platform = options.platform ?? process.platform;
   const runCommandImpl = options.runCommandImpl ?? runCommand;
   const killImpl = options.killImpl ?? process.kill.bind(process);
+  const isProcessAliveImpl = options.isProcessAliveImpl ?? ((candidatePid) => isProcessAlive(candidatePid, { platform }));
 
   if (platform === "win32") {
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
@@ -93,6 +94,14 @@ export function terminateProcessTree(pid, options = {}) {
 
     if (result.error) {
       throw result.error;
+    }
+
+    // taskkill can report a partial-tree failure after the root worker has
+    // already exited. Treat that race as cleanup complete; only surface the
+    // error when the recorded root PID is still alive or cannot be checked.
+    const rootAlive = isProcessAliveImpl(pid);
+    if (rootAlive === false) {
+      return { attempted: true, delivered: false, method: "taskkill", result };
     }
 
     throw new Error(formatCommandFailure(result));
@@ -148,12 +157,13 @@ export function isProcessAlive(pid, options = {}) {
   }
 
   const platform = options.platform ?? process.platform;
+  const runCommandImpl = options.runCommandImpl ?? runCommand;
 
   if (platform === "win32") {
     // Use /FO CSV for locale-independent output.  The data lines are formatted
     // as:  "ImageName","PID","SessionName","Session#","MemUsage"
     // When no process matches, tasklist emits a non-CSV info/warning line.
-    const result = runCommand("tasklist", ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"], {
+    const result = runCommandImpl("tasklist", ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"], {
       shell: false
     });
     if (result.error) {

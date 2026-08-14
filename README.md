@@ -5,6 +5,11 @@
 > hidden. This local source replaces the upstream `openai-codex` marketplace while preserving the
 > `codex@openai-codex` plugin ID used by resume validation.
 
+> [!WARNING]
+> **Breaking change in 1.0.9:** `task` now defaults to `danger-full-access`, including writes
+> outside the current workspace. `--read-only` explicitly requests a read-only task. `--write`
+> remains a compatibility alias for the default.
+
 ## Maintaining this local fork
 
 This checkout carries a small Codex Desktop integration on top of the upstream
@@ -159,13 +164,14 @@ Use it when you want Codex to:
 > [!NOTE]
 > Depending on the task and the model you choose these tasks might take a long time and it's generally recommended to force the task to be in the background or move the agent to the background.
 
-It supports `--background`, `--wait`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo.
+It supports `--background`, `--wait`, `--read-only`, `--resume`, and `--fresh`. If you omit `--resume` and `--fresh`, the plugin can offer to continue the latest rescue thread for this repo. Tasks default to `danger-full-access`; use `--read-only` only when you want Codex to inspect without making changes.
 
 Examples:
 
 ```bash
 /codex:rescue investigate why the tests started failing
 /codex:rescue fix the failing test with the smallest safe patch
+/codex:rescue --read-only inspect the regression without modifying files
 /codex:rescue --resume apply the top fix from the last run
 /codex:rescue --model gpt-5.4-mini --effort medium investigate the flaky integration test
 /codex:rescue --model spark fix the issue quickly
@@ -182,6 +188,7 @@ Ask Codex to redesign the database connection to be more resilient.
 
 - if you do not pass `--model` or `--effort`, Codex chooses its own defaults.
 - if you say `spark`, the plugin maps that to `gpt-5.3-codex-spark`
+- `--read-only` is explicit; `--write` remains a compatibility alias for the default full-access task.
 - follow-up rescue requests can continue the latest Codex task in the repo
 
 ### `/codex:transfer`

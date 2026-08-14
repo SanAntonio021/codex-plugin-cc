@@ -54,6 +54,54 @@ test("terminateProcessTree treats missing Windows processes as already stopped",
   assert.match(outcome.result.stdout, /not found/i);
 });
 
+test("terminateProcessTree tolerates a partial taskkill after the root worker exits", () => {
+  const outcome = terminateProcessTree(1234, {
+    platform: "win32",
+    runCommandImpl(command, args) {
+      return {
+        command,
+        args,
+        status: 128,
+        signal: null,
+        stdout: "ERROR: Unable to terminate a child process.",
+        stderr: "",
+        error: null
+      };
+    },
+    isProcessAliveImpl() {
+      return false;
+    }
+  });
+
+  assert.equal(outcome.attempted, true);
+  assert.equal(outcome.delivered, false);
+  assert.equal(outcome.method, "taskkill");
+});
+
+test("terminateProcessTree still reports a partial kill when the root worker remains alive", () => {
+  assert.throws(
+    () =>
+      terminateProcessTree(1234, {
+        platform: "win32",
+        runCommandImpl(command, args) {
+          return {
+            command,
+            args,
+            status: 128,
+            signal: null,
+            stdout: "ERROR: Unable to terminate a child process.",
+            stderr: "",
+            error: null
+          };
+        },
+        isProcessAliveImpl() {
+          return true;
+        }
+      }),
+    /taskkill \/PID 1234 \/T \/F/
+  );
+});
+
 test("runCommand respects explicit shell option over platform default", () => {
   // On win32, runCommand defaults to shell:true, but callers can override with shell:false.
   // This test verifies explicit shell:false is honored.

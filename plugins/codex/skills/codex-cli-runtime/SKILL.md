@@ -21,13 +21,14 @@ Execution rules:
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Map `spark` to `--model gpt-5.3-codex-spark`.
-- Default to a write-capable Codex run by adding `--write` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
+- `task` defaults to `danger-full-access`; do not add `--write` for a normal rescue.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
 - If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only. Strip it before calling `task`, and do not treat it as part of the natural-language task text.
 - If the forwarded request includes `--model`, normalize `spark` to `gpt-5.3-codex-spark` and pass it through to `task`.
 - If the forwarded request includes `--effort`, pass it through to `task`.
+- Only pass `--read-only` when the user explicitly requests read-only behavior. Preserve `--write` as a compatibility flag. Strip both permission flags from the task text.
 - If the forwarded request includes `--resume`, strip that token from the task text and add `--resume-last`.
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
@@ -36,7 +37,7 @@ Command selection:
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:
-- Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior.
+- Do not automatically downgrade diagnosis, planning, or research to read-only. Only an explicit user request selects `--read-only`.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.
