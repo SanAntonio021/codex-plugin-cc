@@ -63,7 +63,6 @@ function cleanCodexStderr(stderr) {
 function buildThreadParams(cwd, options = {}) {
   return {
     cwd,
-    workspaceRoot: cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
     sandbox: options.sandbox ?? "read-only",

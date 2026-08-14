@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.10
+
+- Fix the Windows `npm run build` entry point. The prebuild step now creates the generated type
+  directory through Node instead of the POSIX-only `mkdir -p` command, then runs the same Codex
+  app-server type generation on every supported platform.
+- Remove the obsolete `workspaceRoot` property from `thread/start`; current app-server protocol
+  types accept `cwd` but reject that extra property.
+
 ## 1.0.9
 
 - **Breaking change:** `task` now defaults to `danger-full-access`, including paths outside the

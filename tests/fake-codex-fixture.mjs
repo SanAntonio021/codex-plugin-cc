@@ -310,6 +310,9 @@ rl.on("line", (line) => {
         if (BEHAVIOR === "auth-run-fails") {
           throw new Error("authentication expired; run codex login");
         }
+        if (Object.hasOwn(message.params, "workspaceRoot")) {
+          throw new Error("thread/start does not accept workspaceRoot");
+        }
         if (requiresExperimental("persistExtendedHistory", message, state) || requiresExperimental("persistFullHistory", message, state)) {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
